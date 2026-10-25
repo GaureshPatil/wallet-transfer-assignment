@@ -5,7 +5,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,19 +58,38 @@ func NewTransferService(store repository.Store) *TransferService {
 }
 
 // CreateTransfer validates the request and executes it in a single database
-// transaction: lock both wallets, move the money, write the two ledger entries
-// and mark the transfer PROCESSED, or mark it FAILED when funds are short.
-// Everything commits together or not at all.
+// transaction: claim the idempotency key, lock both wallets, move the money,
+// write the two ledger entries and mark the transfer PROCESSED, or mark it
+// FAILED when funds are short. Everything commits together or not at all, so a
+// crash can never leave a key claimed without its transfer, or a transfer
+// without its ledger entries.
+//
+// Repeating a key returns the original outcome (Replayed = true) without any
+// new side effect; reusing a key with a different payload is rejected with
+// domain.ErrIdempotencyKeyReused.
 func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferInput) (*TransferResult, error) {
 	if err := domain.ValidateTransferRequest(in.IdempotencyKey, in.FromWalletID, in.ToWalletID, in.Amount); err != nil {
 		return nil, err
 	}
+
+	hash := requestHash(in)
 
 	var result *TransferResult
 	err := s.store.WithinTx(ctx, func(r repository.Repositories) error {
 		// WithinTx may re-run this closure after a transient failure; always
 		// start from a clean slate.
 		result = nil
+
+		// Claim the key first. The unique index makes concurrent duplicates
+		// wait here until the first request commits or rolls back.
+		claimed, err := r.Idempotency().Claim(ctx, in.IdempotencyKey, hash, s.now())
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			result, err = s.replay(ctx, r, in.IdempotencyKey, hash)
+			return err
+		}
 
 		t, err := s.execute(ctx, r, in)
 		if err != nil {
@@ -80,6 +102,36 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 		return nil, err
 	}
 	return result, nil
+}
+
+// replay returns the outcome of the request that originally used key. The same
+// key with a different payload is a client bug and is rejected rather than
+// silently answered with an unrelated result.
+func (s *TransferService) replay(ctx context.Context, r repository.Repositories, key, hash string) (*TransferResult, error) {
+	rec, err := r.Idempotency().Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil || rec.TransferID == nil {
+		// Records are committed together with their transfer, so a visible
+		// record without one means the data is corrupt.
+		return nil, fmt.Errorf("idempotency key %q has no completed transfer", key)
+	}
+	if rec.RequestHash != hash {
+		return nil, domain.ErrIdempotencyKeyReused
+	}
+	t, err := r.Transfers().Get(ctx, *rec.TransferID)
+	if err != nil {
+		return nil, err
+	}
+	return &TransferResult{Transfer: t, Replayed: true}, nil
+}
+
+// requestHash fingerprints the business content of a request (not its key), so
+// a reused key can be told apart from a genuine retry.
+func requestHash(in CreateTransferInput) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", in.FromWalletID, in.ToWalletID, in.Amount)))
+	return hex.EncodeToString(sum[:])
 }
 
 // execute performs the transfer inside an open transaction.
@@ -103,6 +155,9 @@ func (s *TransferService) execute(ctx context.Context, r repository.Repositories
 		return nil, err
 	}
 	if err := r.Transfers().Insert(ctx, t); err != nil {
+		return nil, err
+	}
+	if err := r.Idempotency().AttachTransfer(ctx, in.IdempotencyKey, t.ID); err != nil {
 		return nil, err
 	}
 
