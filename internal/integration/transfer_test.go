@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,43 @@ func TestTransfer_InsufficientFundsIsRecordedAsFailedAndMovesNoMoney(t *testing.
 	details, err := e.transfers.GetTransfer(context.Background(), res.Transfer.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.TransferFailed, details.Transfer.Status, "the failure is durably recorded")
+	e.assertLedgerReconciles(t)
+}
+
+// Overflow is the one business failure detected after the source wallet has
+// already been debited in memory: nothing of that partial change may be persisted.
+func TestTransfer_DestinationOverflowIsRecordedAsFailedAndMovesNoMoney(t *testing.T) {
+	e := newEnv(t)
+	e.wallet(t, "src", 100)
+	e.wallet(t, "full", math.MaxInt64)
+	ctx := context.Background()
+
+	first, err := e.transfers.CreateTransfer(ctx, transferInput("k", "src", "full", 1))
+
+	require.NoError(t, err, "a business failure is a result, not an error")
+	assert.False(t, first.Replayed)
+	assert.Equal(t, domain.TransferFailed, first.Transfer.Status)
+	assert.Equal(t, domain.FailureBalanceOverflow, first.Transfer.FailureReason)
+	assert.EqualValues(t, 100, e.balance(t, "src"), "the in-memory debit must not be persisted")
+	assert.EqualValues(t, math.MaxInt64, e.balance(t, "full"))
+	assert.Equal(t, 0, e.count(t, "ledger_entries"), "a failed transfer writes no ledger entries")
+	assert.Equal(t, 1, e.count(t, "transfers"))
+
+	stored, err := e.transfers.GetTransfer(ctx, first.Transfer.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TransferFailed, stored.Transfer.Status, "the failure is durably recorded")
+	assert.Equal(t, domain.FailureBalanceOverflow, stored.Transfer.FailureReason)
+	assert.Empty(t, stored.Entries)
+
+	replay, err := e.transfers.CreateTransfer(ctx, transferInput("k", "src", "full", 1))
+
+	require.NoError(t, err)
+	assert.True(t, replay.Replayed)
+	assert.Equal(t, first.Transfer.ID, replay.Transfer.ID)
+	assert.Equal(t, domain.TransferFailed, replay.Transfer.Status)
+	assert.Equal(t, domain.FailureBalanceOverflow, replay.Transfer.FailureReason)
+	assert.EqualValues(t, 100, e.balance(t, "src"))
+	assert.Equal(t, 1, e.count(t, "transfers"), "the replay creates nothing new")
 	e.assertLedgerReconciles(t)
 }
 

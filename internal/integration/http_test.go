@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -88,6 +89,24 @@ func TestAPI_FailureIsReplayedWithTheSameStatus(t *testing.T) {
 	assert.Equal(t, "FAILED", second.Body["status"])
 	assert.Equal(t, first.Body, second.Body, "a replayed failure is byte-for-byte the original")
 	assert.EqualValues(t, 10, e.balance(t, "a"))
+}
+
+func TestAPI_DestinationOverflowIsAReplayable422(t *testing.T) {
+	e, srv := newAPI(t)
+	e.wallet(t, "src", 100)
+	e.wallet(t, "full", math.MaxInt64)
+	body := transferJSON("k", "src", "full", 1)
+
+	first := call(t, http.MethodPost, srv.URL+"/transfers", body)
+	second := call(t, http.MethodPost, srv.URL+"/transfers", body)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, first.Status)
+	assert.Equal(t, "BALANCE_OVERFLOW", first.Body["failureReason"])
+	assert.Equal(t, "balance_overflow", first.Body["error"].(map[string]any)["code"])
+	assert.Equal(t, http.StatusUnprocessableEntity, second.Status)
+	assert.Equal(t, "true", second.Header.Get(handler.ReplayedHeader))
+	assert.Equal(t, first.Body, second.Body)
+	assert.EqualValues(t, 100, e.balance(t, "src"))
 }
 
 func TestAPI_ReusingAKeyWithADifferentPayloadIsRejected(t *testing.T) {
