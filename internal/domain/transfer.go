@@ -28,7 +28,6 @@ type FailureReason string
 
 const (
 	FailureInsufficientFunds FailureReason = "INSUFFICIENT_FUNDS"
-	FailureWalletNotFound    FailureReason = "WALLET_NOT_FOUND"
 	FailureBalanceOverflow   FailureReason = "BALANCE_OVERFLOW"
 )
 

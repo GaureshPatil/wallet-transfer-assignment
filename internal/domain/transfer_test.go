@@ -67,13 +67,13 @@ func TestTransfer_StateMachine(t *testing.T) {
 		processed := newPending(t)
 		require.NoError(t, processed.MarkProcessed(now))
 		require.ErrorIs(t, processed.MarkProcessed(now), domain.ErrInvalidTransition)
-		require.ErrorIs(t, processed.MarkFailed(domain.FailureWalletNotFound, now), domain.ErrInvalidTransition)
+		require.ErrorIs(t, processed.MarkFailed(domain.FailureBalanceOverflow, now), domain.ErrInvalidTransition)
 
 		failed := newPending(t)
-		require.NoError(t, failed.MarkFailed(domain.FailureWalletNotFound, now))
+		require.NoError(t, failed.MarkFailed(domain.FailureBalanceOverflow, now))
 		require.ErrorIs(t, failed.MarkProcessed(now), domain.ErrInvalidTransition)
 		require.ErrorIs(t, failed.MarkFailed(domain.FailureInsufficientFunds, now), domain.ErrInvalidTransition)
-		assert.Equal(t, domain.FailureWalletNotFound, failed.FailureReason, "failure reason must not be overwritten")
+		assert.Equal(t, domain.FailureBalanceOverflow, failed.FailureReason, "failure reason must not be overwritten")
 	})
 }
 
