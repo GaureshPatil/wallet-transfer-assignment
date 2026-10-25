@@ -28,11 +28,16 @@ func ValidateWalletID(id string) error {
 	return nil
 }
 
-// validText reports whether s is 1..maxLen bytes of valid UTF-8 without NUL.
+// validText reports whether s is 1..maxLen bytes of valid UTF-8 without NUL or
+// the replacement character U+FFFD.
+//
 // PostgreSQL TEXT rejects NUL and invalid UTF-8, which would otherwise surface
-// as an internal error.
+// as an internal error. U+FFFD is refused because JSON decoders substitute it
+// for invalid bytes and lone surrogate escapes, so allowing it would let many
+// different malformed inputs collapse into one identifier.
 func validText(s string, maxLen int) bool {
-	return s != "" && len(s) <= maxLen && utf8.ValidString(s) && !strings.ContainsRune(s, 0)
+	return s != "" && len(s) <= maxLen && utf8.ValidString(s) &&
+		!strings.ContainsRune(s, 0) && !strings.ContainsRune(s, utf8.RuneError)
 }
 
 // NewWallet validates and builds a wallet opened with openingBalance.

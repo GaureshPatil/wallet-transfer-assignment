@@ -180,6 +180,41 @@ func TestCreateTransfer_RejectsMalformedBodies(t *testing.T) {
 	}
 }
 
+// Go's JSON decoder silently turns invalid UTF-8 into U+FFFD, which would make
+// distinct malformed keys or wallet ids collapse into one identity. The raw body
+// must be rejected before decoding.
+func TestRejectsInvalidUTF8InRequestBodies(t *testing.T) {
+	h := newHandler(&fakeTransfers{create: func(service.CreateTransferInput) (*service.TransferResult, error) {
+		t.Fatal("service must not be called for an invalid request")
+		return nil, nil
+	}}, &fakeWallets{create: func(string, int64) (*domain.Wallet, error) {
+		t.Fatal("service must not be called for an invalid request")
+		return nil, nil
+	}})
+
+	cases := map[string]struct{ path, body string }{
+		"key":           {"/transfers", "{\"idempotencyKey\":\"k\xff\",\"fromWalletId\":\"a\",\"toWalletId\":\"b\",\"amount\":1}"},
+		"other key":     {"/transfers", "{\"idempotencyKey\":\"k\xfe\",\"fromWalletId\":\"a\",\"toWalletId\":\"b\",\"amount\":1}"},
+		"source":        {"/transfers", "{\"idempotencyKey\":\"k\",\"fromWalletId\":\"a\xc3\",\"toWalletId\":\"b\",\"amount\":1}"},
+		"destination":   {"/transfers", "{\"idempotencyKey\":\"k\",\"fromWalletId\":\"a\",\"toWalletId\":\"\x80b\",\"amount\":1}"},
+		"new wallet id": {"/wallets", "{\"id\":\"w\xff\",\"balance\":1}"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, do(t, h, http.MethodPost, tc.path, tc.body).Code)
+		})
+	}
+}
+
+func TestRejectsOversizedRequestBodies(t *testing.T) {
+	h := newHandler(&fakeTransfers{}, &fakeWallets{})
+	body := `{"idempotencyKey":"` + strings.Repeat("a", 2<<20) + `"}`
+
+	rec := do(t, h, http.MethodPost, "/transfers", body)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}
+
 func TestGetTransfer(t *testing.T) {
 	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	tr := &fakeTransfers{get: func(got uuid.UUID) (*service.TransferDetails, error) {

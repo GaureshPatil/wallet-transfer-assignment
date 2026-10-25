@@ -91,6 +91,36 @@ func TestAPI_FailureIsReplayedWithTheSameStatus(t *testing.T) {
 	assert.EqualValues(t, 10, e.balance(t, "a"))
 }
 
+// JSON can smuggle invalid text in as escapes: a lone surrogate such as \ud800
+// decodes to U+FFFD, so different escapes would otherwise share one identity.
+func TestAPI_MalformedTextCannotCollapseIntoOneIdentity(t *testing.T) {
+	e, srv := newAPI(t)
+	e.wallet(t, "a", 100)
+	e.wallet(t, "b", 0)
+
+	cases := map[string]string{
+		"lone high surrogate in key":   `{"idempotencyKey":"k\ud800","fromWalletId":"a","toWalletId":"b","amount":1}`,
+		"another lone surrogate":       `{"idempotencyKey":"k\ud801","fromWalletId":"a","toWalletId":"b","amount":1}`,
+		"lone surrogate in wallet id":  `{"idempotencyKey":"k","fromWalletId":"a\udc00","toWalletId":"b","amount":1}`,
+		"literal replacement in key":   "{\"idempotencyKey\":\"k�\",\"fromWalletId\":\"a\",\"toWalletId\":\"b\",\"amount\":1}",
+		"invalid raw bytes in key":     "{\"idempotencyKey\":\"k\xff\",\"fromWalletId\":\"a\",\"toWalletId\":\"b\",\"amount\":1}",
+		"other invalid raw bytes":      "{\"idempotencyKey\":\"k\xfe\",\"fromWalletId\":\"a\",\"toWalletId\":\"b\",\"amount\":1}",
+		"lone surrogate in new wallet": `{"id":"w\ud800","balance":1}`,
+	}
+	for name, body := range cases {
+		path := "/transfers"
+		if name == "lone surrogate in new wallet" {
+			path = "/wallets"
+		}
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, call(t, http.MethodPost, srv.URL+path, body).Status)
+		})
+	}
+	assert.Equal(t, 0, e.count(t, "transfers"))
+	assert.Equal(t, 0, e.count(t, "idempotency_records"))
+	assert.Equal(t, 2, e.count(t, "wallets"), "no wallet was created from malformed text")
+}
+
 func TestAPI_DestinationOverflowIsAReplayable422(t *testing.T) {
 	e, srv := newAPI(t)
 	e.wallet(t, "src", 100)

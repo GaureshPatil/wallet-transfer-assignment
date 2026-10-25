@@ -4,6 +4,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -256,10 +258,31 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, r *http.Request, err 
 	}
 }
 
-// decodeJSON reads exactly one JSON object, rejecting unknown fields and
-// oversized bodies. It writes the error response itself and reports success.
+// decodeJSON reads exactly one JSON object, rejecting unknown fields, invalid
+// UTF-8 and oversized bodies. It writes the error response itself and reports
+// success.
+//
+// The raw body is checked for valid UTF-8 first because encoding/json silently
+// replaces invalid bytes with U+FFFD, which would let distinct malformed keys or
+// wallet ids collapse into one identity.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+				fmt.Sprintf("request body must be at most %d bytes", maxBodyBytes))
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid_request", "could not read request body")
+		return false
+	}
+	if !utf8.Valid(raw) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body must be valid UTF-8")
+		return false
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("malformed JSON body: %v", err))

@@ -33,6 +33,8 @@ func TestNewTransfer_Validation(t *testing.T) {
 		{"NUL in source", "k1", "a\x00", "b", 100, true},
 		{"NUL in destination", "k1", "a", "\x00b", 100, true},
 		{"invalid UTF-8 in key", "k\xff", "a", "b", 100, true},
+		{"replacement character in key", "k�", "a", "b", 100, true},
+		{"replacement character in wallet id", "k1", "a�", "b", 100, true},
 		{"over-long wallet id", "k1", strings.Repeat("a", 65), "b", 100, true},
 	}
 	for _, tc := range tests {
