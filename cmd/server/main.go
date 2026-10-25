@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,10 @@ import (
 	"github.com/GaureshPatil/wallet-transfer-assignment/internal/service"
 	"github.com/GaureshPatil/wallet-transfer-assignment/migrations"
 )
+
+// shutdownGracePeriod is how long in-flight requests may finish after SIGTERM
+// before they are cancelled.
+const shutdownGracePeriod = 15 * time.Second
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -59,7 +64,6 @@ func run(log *slog.Logger) error {
 
 	store := postgres.NewStore(pool)
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           handler.New(service.NewTransferService(store), service.NewWalletService(store), log),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -67,19 +71,10 @@ func run(log *slog.Logger) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		log.Info("listening", "addr", addr)
-		errCh <- srv.ListenAndServe()
-	}()
-
-	select {
-	case err := <-errCh:
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
 		return err
-	case <-ctx.Done():
-		log.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutdownCtx)
 	}
+	log.Info("listening", "addr", ln.Addr().String())
+	return serve(ctx, srv, ln, shutdownGracePeriod, log)
 }
