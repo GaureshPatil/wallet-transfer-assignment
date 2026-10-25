@@ -64,10 +64,10 @@ func NewTransfer(id uuid.UUID, idempotencyKey, fromWalletID, toWalletID string, 
 // ValidateTransferRequest checks the invariants every transfer request must meet.
 func ValidateTransferRequest(idempotencyKey, fromWalletID, toWalletID string, amount int64) error {
 	switch {
-	case idempotencyKey == "" || len(idempotencyKey) > maxIdempotencyKeyLen:
-		return fmt.Errorf("%w: idempotencyKey must be 1-%d characters", ErrInvalidRequest, maxIdempotencyKeyLen)
-	case fromWalletID == "" || toWalletID == "":
-		return fmt.Errorf("%w: fromWalletId and toWalletId are required", ErrInvalidRequest)
+	case !validText(idempotencyKey, maxIdempotencyKeyLen):
+		return fmt.Errorf("%w: idempotencyKey must be 1-%d characters of valid text", ErrInvalidRequest, maxIdempotencyKeyLen)
+	case !validText(fromWalletID, maxWalletIDLen) || !validText(toWalletID, maxWalletIDLen):
+		return fmt.Errorf("%w: fromWalletId and toWalletId are required (1-%d characters of valid text)", ErrInvalidRequest, maxWalletIDLen)
 	case fromWalletID == toWalletID:
 		return fmt.Errorf("%w: cannot transfer to the same wallet", ErrInvalidRequest)
 	case amount <= 0:

@@ -151,3 +151,31 @@ func TestAPI_WalletsAndTransferLookup(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, call(t, http.MethodPost, srv.URL+"/transfers", transferJSON("k2", "a", "ghost", 1)).Status)
 }
+
+// PostgreSQL TEXT cannot hold NUL or invalid UTF-8. Such input must be a 400
+// from validation, never a 500 from the database.
+func TestAPI_RejectsTextThatPostgresCannotStore(t *testing.T) {
+	_, srv := newAPI(t)
+	require.Equal(t, http.StatusCreated, call(t, http.MethodPost, srv.URL+"/wallets", `{"id":"a","balance":10}`).Status)
+
+	transfers := map[string]string{
+		"NUL in key":         `{"idempotencyKey":"k\u0000","fromWalletId":"a","toWalletId":"b","amount":1}`,
+		"NUL in source":      `{"idempotencyKey":"k","fromWalletId":"a\u0000","toWalletId":"b","amount":1}`,
+		"NUL in destination": `{"idempotencyKey":"k","fromWalletId":"a","toWalletId":"\u0000b","amount":1}`,
+	}
+	for name, body := range transfers {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, call(t, http.MethodPost, srv.URL+"/transfers", body).Status)
+		})
+	}
+
+	t.Run("NUL in new wallet id", func(t *testing.T) {
+		assert.Equal(t, http.StatusBadRequest, call(t, http.MethodPost, srv.URL+"/wallets", `{"id":"x\u0000y","balance":1}`).Status)
+	})
+	t.Run("NUL in wallet path", func(t *testing.T) {
+		assert.Equal(t, http.StatusBadRequest, call(t, http.MethodGet, srv.URL+"/wallets/a%00b", "").Status)
+	})
+	t.Run("invalid UTF-8 in wallet path", func(t *testing.T) {
+		assert.Equal(t, http.StatusBadRequest, call(t, http.MethodGet, srv.URL+"/wallets/a%ff", "").Status)
+	})
+}

@@ -3,7 +3,9 @@ package domain
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const maxWalletIDLen = 64
@@ -17,10 +19,26 @@ type Wallet struct {
 	UpdatedAt      time.Time
 }
 
+// ValidateWalletID checks that id is storable and within bounds. It runs before
+// any repository access so bad input is a 400, not a database error.
+func ValidateWalletID(id string) error {
+	if !validText(id, maxWalletIDLen) {
+		return fmt.Errorf("%w: wallet id must be 1-%d characters of valid text", ErrInvalidRequest, maxWalletIDLen)
+	}
+	return nil
+}
+
+// validText reports whether s is 1..maxLen bytes of valid UTF-8 without NUL.
+// PostgreSQL TEXT rejects NUL and invalid UTF-8, which would otherwise surface
+// as an internal error.
+func validText(s string, maxLen int) bool {
+	return s != "" && len(s) <= maxLen && utf8.ValidString(s) && !strings.ContainsRune(s, 0)
+}
+
 // NewWallet validates and builds a wallet opened with openingBalance.
 func NewWallet(id string, openingBalance int64, now time.Time) (*Wallet, error) {
-	if id == "" || len(id) > maxWalletIDLen {
-		return nil, fmt.Errorf("%w: wallet id must be 1-%d characters", ErrInvalidRequest, maxWalletIDLen)
+	if err := ValidateWalletID(id); err != nil {
+		return nil, err
 	}
 	if openingBalance < 0 {
 		return nil, fmt.Errorf("%w: opening balance must not be negative", ErrInvalidRequest)

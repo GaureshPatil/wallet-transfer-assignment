@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,11 @@ func TestNewTransfer_Validation(t *testing.T) {
 		{"same wallet", "k1", "a", "a", 100, true},
 		{"zero amount", "k1", "a", "b", 0, true},
 		{"negative amount", "k1", "a", "b", -5, true},
+		{"NUL in key", "k\x001", "a", "b", 100, true},
+		{"NUL in source", "k1", "a\x00", "b", 100, true},
+		{"NUL in destination", "k1", "a", "\x00b", 100, true},
+		{"invalid UTF-8 in key", "k\xff", "a", "b", 100, true},
+		{"over-long wallet id", "k1", strings.Repeat("a", 65), "b", 100, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,6 +116,17 @@ func TestNewWallet_Validation(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrInvalidRequest)
 	_, err = domain.NewWallet("a", -1, now)
 	require.ErrorIs(t, err, domain.ErrInvalidRequest)
+	_, err = domain.NewWallet("a\x00b", 0, now)
+	require.ErrorIs(t, err, domain.ErrInvalidRequest, "PostgreSQL TEXT cannot store NUL")
+	_, err = domain.NewWallet("a\xff", 0, now)
+	require.ErrorIs(t, err, domain.ErrInvalidRequest, "ids must be valid UTF-8")
+}
+
+func TestValidateWalletID(t *testing.T) {
+	require.NoError(t, domain.ValidateWalletID("wallet_1"))
+	require.ErrorIs(t, domain.ValidateWalletID(""), domain.ErrInvalidRequest)
+	require.ErrorIs(t, domain.ValidateWalletID("a\x00"), domain.ErrInvalidRequest)
+	require.ErrorIs(t, domain.ValidateWalletID(strings.Repeat("a", 65)), domain.ErrInvalidRequest)
 }
 
 func TestLedgerEntriesFor_IsBalancedDoubleEntry(t *testing.T) {

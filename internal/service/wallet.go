@@ -33,5 +33,8 @@ func (s *WalletService) CreateWallet(ctx context.Context, id string, openingBala
 
 // GetWallet returns a wallet and its current balance.
 func (s *WalletService) GetWallet(ctx context.Context, id string) (*domain.Wallet, error) {
+	if err := domain.ValidateWalletID(id); err != nil {
+		return nil, err
+	}
 	return s.store.Wallets().Get(ctx, id)
 }
