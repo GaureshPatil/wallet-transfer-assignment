@@ -48,11 +48,16 @@ type TransferService struct {
 	newID func() uuid.UUID
 }
 
+// utcMicros is the service clock. PostgreSQL stores timestamps with microsecond
+// precision, so values are truncated up front: the response to the first request
+// then equals a later replay that is read back from the database.
+func utcMicros() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }
+
 // NewTransferService builds a TransferService on top of store.
 func NewTransferService(store repository.Store) *TransferService {
 	return &TransferService{
 		store: store,
-		now:   func() time.Time { return time.Now().UTC() },
+		now:   utcMicros,
 		newID: uuid.New,
 	}
 }

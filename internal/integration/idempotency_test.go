@@ -29,6 +29,8 @@ func TestIdempotency_DuplicateRequestReturnsTheOriginalResultWithoutAnotherTrans
 	assert.False(t, first.Replayed)
 	assert.True(t, second.Replayed)
 	assert.Equal(t, first.Transfer.ID, second.Transfer.ID, "the original transfer is returned")
+	assert.True(t, first.Transfer.CreatedAt.Equal(second.Transfer.CreatedAt), "created at: %s vs %s", first.Transfer.CreatedAt, second.Transfer.CreatedAt)
+	assert.True(t, first.Transfer.UpdatedAt.Equal(second.Transfer.UpdatedAt), "updated at: %s vs %s", first.Transfer.UpdatedAt, second.Transfer.UpdatedAt)
 	assert.Equal(t, domain.TransferProcessed, second.Transfer.Status)
 	assert.EqualValues(t, 400, e.balance(t, "a"), "money moves once")
 	assert.EqualValues(t, 100, e.balance(t, "b"))

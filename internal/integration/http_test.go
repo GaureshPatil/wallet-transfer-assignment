@@ -65,7 +65,7 @@ func TestAPI_DuplicateRequestReturnsOriginalResultWithoutDuplicateTransfer(t *te
 	assert.Equal(t, http.StatusCreated, first.Status)
 	assert.Equal(t, http.StatusOK, second.Status)
 	assert.Equal(t, "true", second.Header.Get(handler.ReplayedHeader))
-	assert.Equal(t, first.Body["id"], second.Body["id"])
+	assert.Equal(t, first.Body, second.Body, "a replay returns the complete original response, timestamps included")
 	assert.Equal(t, "PROCESSED", second.Body["status"])
 	assert.EqualValues(t, 400, e.balance(t, "wallet_1"))
 	assert.EqualValues(t, 100, e.balance(t, "wallet_2"))
@@ -85,7 +85,7 @@ func TestAPI_FailureIsReplayedWithTheSameStatus(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, first.Status)
 	assert.Equal(t, http.StatusUnprocessableEntity, second.Status)
 	assert.Equal(t, "FAILED", second.Body["status"])
-	assert.Equal(t, first.Body["id"], second.Body["id"])
+	assert.Equal(t, first.Body, second.Body, "a replayed failure is byte-for-byte the original")
 	assert.EqualValues(t, 10, e.balance(t, "a"))
 }
 

@@ -16,7 +16,7 @@ type WalletService struct {
 
 // NewWalletService builds a WalletService on top of store.
 func NewWalletService(store repository.Store) *WalletService {
-	return &WalletService{store: store, now: func() time.Time { return time.Now().UTC() }}
+	return &WalletService{store: store, now: utcMicros}
 }
 
 // CreateWallet opens a wallet with openingBalance minor units.

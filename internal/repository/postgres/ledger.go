@@ -43,6 +43,7 @@ func (r *ledgerRepo) ListByTransfer(ctx context.Context, transferID uuid.UUID) (
 			return nil, fmt.Errorf("scan ledger entry: %w", err)
 		}
 		e.Type = domain.EntryType(t)
+		e.CreatedAt = e.CreatedAt.UTC()
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {

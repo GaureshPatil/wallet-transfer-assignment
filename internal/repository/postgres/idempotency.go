@@ -40,6 +40,7 @@ func (r *idempotencyRepo) Get(ctx context.Context, key string) (*repository.Idem
 	if err != nil {
 		return nil, fmt.Errorf("get idempotency record: %w", err)
 	}
+	rec.CreatedAt = rec.CreatedAt.UTC()
 	return &rec, nil
 }
 

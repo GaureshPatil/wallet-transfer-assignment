@@ -38,6 +38,7 @@ func (r *walletRepo) Get(ctx context.Context, id string) (*domain.Wallet, error)
 	if err != nil {
 		return nil, fmt.Errorf("get wallet: %w", err)
 	}
+	w.CreatedAt, w.UpdatedAt = w.CreatedAt.UTC(), w.UpdatedAt.UTC()
 	return &w, nil
 }
 
@@ -62,6 +63,7 @@ func (r *walletRepo) LockForUpdate(ctx context.Context, ids ...string) (map[stri
 		if err := rows.Scan(&w.ID, &w.Balance, &w.OpeningBalance, &w.CreatedAt, &w.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan wallet: %w", err)
 		}
+		w.CreatedAt, w.UpdatedAt = w.CreatedAt.UTC(), w.UpdatedAt.UTC()
 		wallets[w.ID] = &w
 	}
 	if err := rows.Err(); err != nil {

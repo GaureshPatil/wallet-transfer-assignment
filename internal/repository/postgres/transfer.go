@@ -43,6 +43,7 @@ func (r *transferRepo) Get(ctx context.Context, id uuid.UUID) (*domain.Transfer,
 	}
 	t.Status = domain.TransferStatus(status)
 	t.FailureReason = domain.FailureReason(reason)
+	t.CreatedAt, t.UpdatedAt = t.CreatedAt.UTC(), t.UpdatedAt.UTC()
 	return &t, nil
 }
 
