@@ -135,8 +135,8 @@ func TestConcurrent_DuplicateRequestsExecuteExactlyOnce(t *testing.T) {
 	const attempts = 30
 	results := make([]*service.TransferResult, attempts)
 	errs := make([]error, attempts)
-	runConcurrently(t, attempts, time.Minute, func(i int) {
-		results[i], errs[i] = e.transfers.CreateTransfer(context.Background(), transferInput("same-key", "a", "b", 100))
+	runConcurrently(t, attempts, time.Minute, func(ctx context.Context, i int) {
+		results[i], errs[i] = e.transfers.CreateTransfer(ctx, transferInput("same-key", "a", "b", 100))
 	})
 
 	ids := map[uuid.UUID]bool{}
@@ -166,9 +166,9 @@ func TestConcurrent_RetriesAcrossManyKeysExecuteEachKeyOnce(t *testing.T) {
 	const keys, copies = 8, 6
 	var mu sync.Mutex
 	processed := map[string]uuid.UUID{}
-	runConcurrently(t, keys*copies, 2*time.Minute, func(i int) {
+	runConcurrently(t, keys*copies, 2*time.Minute, func(ctx context.Context, i int) {
 		key := fmt.Sprintf("key-%d", i%keys)
-		res, err := e.transfers.CreateTransfer(context.Background(), transferInput(key, "a", "b", 10))
+		res, err := e.transfers.CreateTransfer(ctx, transferInput(key, "a", "b", 10))
 		if !assert.NoError(t, err) { // require must not be used off the test goroutine
 			return
 		}

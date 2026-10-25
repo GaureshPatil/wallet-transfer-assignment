@@ -16,9 +16,16 @@ import (
 )
 
 // runConcurrently starts n goroutines at the same instant and waits for all of
-// them, failing the test if they do not finish within timeout (a deadlock).
-func runConcurrently(t *testing.T, n int, timeout time.Duration, fn func(i int)) {
+// them. Workers receive a context that expires after timeout; they must pass it
+// to their database and HTTP calls. If the deadline passes (a probable
+// deadlock), the in-flight calls are cancelled, the workers are joined, and only
+// then does the test fail, so no goroutine is left holding a connection when
+// test cleanup closes the pool.
+func runConcurrently(t *testing.T, n int, timeout time.Duration, fn func(ctx context.Context, i int)) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	var ready, done sync.WaitGroup
 	start := make(chan struct{})
 	ready.Add(n)
@@ -28,7 +35,7 @@ func runConcurrently(t *testing.T, n int, timeout time.Duration, fn func(i int))
 			defer done.Done()
 			ready.Done()
 			<-start
-			fn(i)
+			fn(ctx, i)
 		}()
 	}
 	ready.Wait()
@@ -36,10 +43,19 @@ func runConcurrently(t *testing.T, n int, timeout time.Duration, fn func(i int))
 
 	finished := make(chan struct{})
 	go func() { done.Wait(); close(finished) }()
+
 	select {
 	case <-finished:
-	case <-time.After(timeout):
+	case <-ctx.Done():
+		// Cancelled calls return promptly, so this join is short.
+		select {
+		case <-finished:
+		case <-time.After(30 * time.Second):
+		}
 		t.Fatalf("goroutines did not finish within %s: probable deadlock", timeout)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("goroutines hit the %s deadline: probable deadlock", timeout)
 	}
 }
 
@@ -51,8 +67,8 @@ func TestConcurrent_DebitsFromOneWalletNeverOverspend(t *testing.T) {
 	const attempts = 50 // each moves 100, so only 10 can be afforded
 	results := make([]*service.TransferResult, attempts)
 	errs := make([]error, attempts)
-	runConcurrently(t, attempts, time.Minute, func(i int) {
-		results[i], errs[i] = e.transfers.CreateTransfer(context.Background(),
+	runConcurrently(t, attempts, time.Minute, func(ctx context.Context, i int) {
+		results[i], errs[i] = e.transfers.CreateTransfer(ctx,
 			transferInput(fmt.Sprintf("key-%d", i), "src", "dst", 100))
 	})
 
@@ -82,12 +98,12 @@ func TestConcurrent_OpposingTransfersDoNotDeadlock(t *testing.T) {
 
 	const attempts = 100
 	errs := make([]error, attempts)
-	runConcurrently(t, attempts, time.Minute, func(i int) {
+	runConcurrently(t, attempts, time.Minute, func(ctx context.Context, i int) {
 		from, to := "a", "b"
 		if i%2 == 1 {
 			from, to = to, from
 		}
-		_, errs[i] = e.transfers.CreateTransfer(context.Background(),
+		_, errs[i] = e.transfers.CreateTransfer(ctx,
 			transferInput(fmt.Sprintf("key-%d", i), from, to, 1))
 	})
 
@@ -109,11 +125,11 @@ func TestConcurrent_RandomTransfersConserveMoney(t *testing.T) {
 
 	const attempts = 200
 	errs := make([]error, attempts)
-	runConcurrently(t, attempts, 2*time.Minute, func(i int) {
+	runConcurrently(t, attempts, 2*time.Minute, func(ctx context.Context, i int) {
 		rng := rand.New(rand.NewSource(int64(i)))
 		from := rng.Intn(len(ids))
 		to := (from + 1 + rng.Intn(len(ids)-1)) % len(ids)
-		_, errs[i] = e.transfers.CreateTransfer(context.Background(),
+		_, errs[i] = e.transfers.CreateTransfer(ctx,
 			transferInput(fmt.Sprintf("key-%d", i), ids[from], ids[to], int64(1+rng.Intn(400))))
 	})
 

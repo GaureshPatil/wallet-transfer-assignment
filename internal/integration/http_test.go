@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,8 +110,13 @@ func TestAPI_ConcurrentDuplicatesExecuteOnce(t *testing.T) {
 
 	const n = 20
 	statuses := make([]int, n)
-	runConcurrently(t, n, time.Minute, func(i int) {
-		resp, err := http.Post(srv.URL+"/transfers", "application/json", bytes.NewBufferString(body))
+	runConcurrently(t, n, time.Minute, func(ctx context.Context, i int) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/transfers", bytes.NewBufferString(body))
+		if !assert.NoError(t, err) {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
 		if assert.NoError(t, err) {
 			statuses[i] = resp.StatusCode
 			_ = resp.Body.Close()
