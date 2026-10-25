@@ -1,7 +1,8 @@
 # Wallet Transfer Service: Understanding & Approach
 
 > Status: **design note, written before implementation** (documentation-first workflow, per `ASSIGNMENT.md`).
-> Implementation will follow on this same branch / PR.
+> The implementation followed on this same branch / PR. Where building it changed the plan, the section is
+> updated and the change is listed in [section 13](#13-changes-made-while-implementing).
 
 ## 1. Problem understanding
 
@@ -73,9 +74,8 @@ ledger_entries(                                    -- append-only
 
 idempotency_records(
   key TEXT PRIMARY KEY,
-  request_hash TEXT NOT NULL,                      -- sha256 of canonical request
-  transfer_id UUID REFERENCES transfers(id),
-  response_status INT, response_body JSONB,        -- stored original result for replay
+  request_hash TEXT NOT NULL,                      -- sha256 of the business payload
+  transfer_id UUID REFERENCES transfers(id),       -- replay = load this transfer
   created_at)
 ```
 
@@ -93,13 +93,14 @@ source of truth. Invariant, asserted in tests: `balance = opening balance + Σ c
    - Conflict + different `request_hash` → `422 IDEMPOTENCY_KEY_REUSED`.
    - Conflict + same hash → replay stored response. A *concurrent* duplicate blocks on the unique index
      until the first transaction commits/rolls back, then sees the result (or takes over cleanly).
-3. Insert transfer as `PENDING`.
-4. **Lock both wallets in deterministic order:**
+3. **Lock both wallets in deterministic order:**
    `SELECT … FROM wallets WHERE id = ANY($1) ORDER BY id FOR UPDATE` → A→B and B→A cannot deadlock.
-5. Missing wallet → `FAILED(WALLET_NOT_FOUND)`; `balance < amount` → `FAILED(INSUFFICIENT_FUNDS)`.
+   A missing wallet returns `ErrWalletNotFound` (rolling back the key claim; see section 13).
+4. Insert the transfer as `PENDING` and link it to the idempotency record.
+5. `balance < amount` → `FAILED(INSUFFICIENT_FUNDS)` (guarded transition, no ledger rows).
 6. Success: debit source, credit destination, insert 2 ledger rows, and transition
    `PENDING → PROCESSED` with a guarded `UPDATE … WHERE status = 'PENDING'`.
-7. Persist the response in `idempotency_records` and **commit** (key + transfer + ledger + balances are atomic).
+7. **Commit** (key + transfer + ledger + balances are atomic). A replay loads the linked transfer.
 
 **Business failures are recorded, not rolled back:** an insufficient-funds failure commits a `FAILED` transfer
 with no ledger rows and replays the *same* `422` on retry (a failed attempt under a key is a final result;
@@ -128,7 +129,7 @@ times with backoff for the transient ones.
 | Two debits on one wallet | Serialised by `FOR UPDATE`; later one sees updated balance → insufficient funds. |
 | A→B and B→A simultaneously | Ordered locking, no deadlock. |
 | Self-transfer / amount ≤ 0 / overflow | Rejected in domain; DB `CHECK`s as backstop. |
-| Unknown wallet | Recorded `FAILED(WALLET_NOT_FOUND)`, replayable. |
+| Unknown wallet | `404`, nothing recorded (the key is not consumed; the wallet may be created later). |
 | Crash mid-transaction | Rollback; no partial state. |
 | Crash after commit, response lost | Client retries same key → stored result returned. |
 | Stuck `PENDING` | Cannot be committed in the single-tx design (documented; async split would need a reaper). |
@@ -152,8 +153,8 @@ Optional, kept deliberately small: `GET /wallets/{id}` (balance), `GET /transfer
 ## 9. Testing strategy (Red → Green → Refactor, visible in commit order)
 
 - **Domain unit tests:** state machine, validation.
-- **Service tests** with fake repositories for logic branches.
-- **Integration tests on real Postgres** (`TEST_DATABASE_URL`, docker-compose provided):
+- **Handler tests** with fake services pin the HTTP contract.
+- **Service and repository tests on real Postgres** (embedded automatically, or `TEST_DATABASE_URL`):
   - happy path: 2 ledger entries, balances correct, ledger balanced
   - idempotent replay: no second ledger write; same-key-different-payload rejected
   - insufficient funds → `FAILED`, no balance change, replayed on retry
@@ -175,7 +176,7 @@ counters (transfers by outcome, replays, tx retries) if time allows.
 - Single-region, single Postgres primary; cross-service distributed transactions (sagas/outbox) are out of scope.
 - Synchronous processing: simpler and fully atomic, at the cost of holding row locks for the transaction's duration.
 
-## 12. Delivery plan (topical commits)
+## 12. Delivery plan (topical commits), as originally planned
 
 1. `docs:` approach (this PR's first commit)
 2. `chore:` project scaffold, Makefile, lint config, docker-compose
@@ -187,3 +188,14 @@ counters (transfers by outcome, replays, tx retries) if time allows.
 8. `test:` concurrency & reconciliation tests
 9. `feat:` HTTP handlers
 10. `docs:` README, PR notes, AI usage disclosure & session transcript
+
+## 13. Changes made while implementing
+
+| Planned | Built | Why |
+|---|---|---|
+| `idempotency_records` stored `response_status` / `response_body` | Stores only `request_hash` + `transfer_id`; replay loads the transfer | Keeps the HTTP shape out of the data layer and avoids a second copy of the result that could drift. |
+| Unknown wallet recorded as `FAILED(WALLET_NOT_FOUND)` | Returns `404` and writes nothing | `transfers` has foreign keys to `wallets`, so a transfer to a non-existent wallet cannot be stored. Not consuming the key is also friendlier: the wallet may be created later. |
+| docker-compose Postgres for tests | Embedded PostgreSQL started by the test suite | No Docker needed; `go test ./...` works anywhere (`TEST_DATABASE_URL` overrides). |
+| Service tests with fake repositories | Service tests run against real Postgres | Locking and constraint behaviour cannot be faked meaningfully; the same tests exercise the repository. |
+| Optional metrics counters | Structured request and outcome logs only | Kept the scope explainable. |
+| Ledger balance check as an optional hardening | Implemented as a deferred constraint trigger | Cheap, and it makes "the ledger always balances" a database guarantee. |
