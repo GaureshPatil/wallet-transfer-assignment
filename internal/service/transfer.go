@@ -27,6 +27,9 @@ type CreateTransferInput struct {
 // result, not an error.
 type TransferResult struct {
 	Transfer *domain.Transfer
+	// Replayed is true when the request repeated an earlier idempotency key and
+	// Transfer is the original outcome rather than a new execution.
+	Replayed bool
 }
 
 // TransferDetails is a transfer together with its ledger entries.
